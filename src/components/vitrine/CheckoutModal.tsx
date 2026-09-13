@@ -75,39 +75,52 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
         currency,
       };
 
-      // 2. Appel API route pour enregistrer la commande dans Supabase
-      try {
-        await fetch('/api/commandes', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            store_id: profile.id,
-            catalog_id: catalog?.id || null,
-            reference,
-            nom_client: nom.trim(),
-            telephone_client: telephone.trim(),
-            adresse_livraison: adresse.trim() || null,
-            notes: notes.trim() || null,
-            total: totalAmount,
-            mode_paiement: 'a_la_livraison',
-            statut: 'envoyee_whatsapp',
-            items: items.map((i) => ({
-              product_id: i.product_id ?? null,
-              nom_produit: i.nom,
-              taille: i.taille ?? null,
-              couleur: i.couleur ?? null,
-              quantite: i.quantite,
-              prix_unitaire: i.prix_promo && i.prix_promo > 0 ? i.prix_promo : i.prix,
-              total_ligne: (i.prix_promo && i.prix_promo > 0 ? i.prix_promo : i.prix) * i.quantite,
-            })),
-          }),
-        });
-      } catch (err) {
-        console.warn('Sauvegarde serveur locale:', err);
-      }
-
-      // 3. Construction du lien WhatsApp
+      // 2. Ouverture de WhatsApp, avant toute attente.
+      //
+      // WebKit n'autorise l'ouverture d'un onglet que dans le fil direct du
+      // geste de l'utilisateur. Placée après un `await` ou dans un
+      // `setTimeout`, elle est refusée sans le moindre message. Comme tous les
+      // navigateurs de l'iPhone reposent sur WebKit, Safari, Chrome et Firefox
+      // échouaient ensemble : le client remplissait le formulaire et rien ne
+      // se passait.
       const whatsAppLink = generateWhatsAppLink(orderDetails);
+      const onglet = window.open(whatsAppLink, '_blank');
+
+      // 3. Enregistrement de la commande, sans attendre la réponse.
+      //
+      // `keepalive` fait aboutir la requête même si la page est quittée dans
+      // la foulée — ce qui arrive quand l'onglet a été refusé et qu'on bascule
+      // la page entière vers WhatsApp, juste en dessous.
+      fetch('/api/commandes', {
+        method: 'POST',
+        keepalive: true,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          store_id: profile.id,
+          catalog_id: catalog?.id || null,
+          reference,
+          nom_client: nom.trim(),
+          telephone_client: telephone.trim(),
+          adresse_livraison: adresse.trim() || null,
+          notes: notes.trim() || null,
+          total: totalAmount,
+          mode_paiement: 'a_la_livraison',
+          statut: 'envoyee_whatsapp',
+          items: items.map((i) => ({
+            product_id: i.product_id ?? null,
+            nom_produit: i.nom,
+            taille: i.taille ?? null,
+            couleur: i.couleur ?? null,
+            quantite: i.quantite,
+            prix_unitaire: i.prix_promo && i.prix_promo > 0 ? i.prix_promo : i.prix,
+            total_ligne: (i.prix_promo && i.prix_promo > 0 ? i.prix_promo : i.prix) * i.quantite,
+          })),
+        }),
+      }).catch((err) => {
+        // La commande part quand même sur WhatsApp : le marchand la reçoit,
+        // seul le tableau de bord l'ignorera.
+        console.warn('Enregistrement de la commande:', err);
+      });
 
       // 4. Déclenchement de confettis festifs
       try {
@@ -124,10 +137,12 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
       setCompletedOrder({ reference, whatsAppLink });
       clearCart();
 
-      // 5. Redirection automatique vers WhatsApp
-      setTimeout(() => {
-        window.open(whatsAppLink, '_blank');
-      }, 500);
+      // 5. Onglet refusé : on bascule la page elle-même.
+      //
+      // Une navigation n'est jamais bloquée, contrairement à une ouverture
+      // d'onglet. Le client quitte la vitrine, mais il arrive sur WhatsApp —
+      // ce qu'il voulait.
+      if (!onglet) window.location.href = whatsAppLink;
     } catch (error) {
       console.error('Erreur commande:', error);
     } finally {
